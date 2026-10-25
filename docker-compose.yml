@@ -1,0 +1,26 @@
+version: "3.8"
+
+services:
+  aggregator:
+    build: .
+    command: aggregator
+    ports:
+      - "50051:50051"
+
+  bbo_publisher:
+    build: .
+    command: bbo
+    depends_on:
+      - aggregator
+
+  volume_bands_publisher:
+    build: .
+    command: volume
+    depends_on:
+      - aggregator
+
+  price_bands_publisher:
+    build: .
+    command: price
+    depends_on:
+      - aggregator

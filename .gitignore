@@ -1,0 +1,13 @@
+build/
+generated/
+*.o
+*.obj
+*.so
+*.dylib
+*.exe
+run_tests
+aggregator_server
+bbo_publisher
+volume_bands_publisher
+price_bands_publisher
+.DS_Store

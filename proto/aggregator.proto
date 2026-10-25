@@ -1,0 +1,116 @@
+syntax = "proto3";
+
+package aggregator;
+
+// A single price level: price (quote currency per unit) and size (base units).
+// NOTE: named 'Level' rather than 'PriceLevel' because the generated C++ class
+// would otherwise collide with the internal aggregator::PriceLevel struct
+// (same proto package / C++ namespace). Wire format is unaffected.
+message Level {
+  double price = 1;
+  double size  = 2;
+}
+
+// Per-venue book snapshot, included for transparency / extensibility.
+message VenueBook {
+  string           venue = 1;
+  repeated Level   bids  = 2; // descending price
+  repeated Level   asks  = 3; // ascending price
+}
+
+// Consolidated book update (FULL_BOOK mode).
+message BookUpdate {
+  string symbol       = 1;  // e.g. BTCUSDT
+  uint64 sequence     = 2;  // monotonic consolidated sequence
+  int64  timestamp_us = 3;  // producer wall-clock microseconds
+  repeated Level bids  = 4; // consolidated top-K, descending price
+  repeated Level asks  = 5; // consolidated top-K, ascending price
+  repeated VenueBook venues = 6; // per-venue top levels (trimmed)
+}
+
+// ---- Subscription modes -----------------------------------------------------
+
+// What a subscriber wants pushed. The server computes the bands, so a
+// subscriber only receives what it asked for instead of the whole book.
+enum SubscribeMode {
+  MODE_UNSPECIFIED = 0; // treated as FULL_BOOK
+  BBO              = 1; // best bid/offer
+  VOLUME_BANDS     = 2; // price reached at fixed USD notionals
+  PRICE_BANDS      = 3; // price + cumulative size at fixed bps offsets
+  FULL_BOOK        = 4; // whole consolidated book + per-venue detail
+}
+
+message SubscribeRequest {
+  string symbol = 1; // empty => default symbol (BTCUSDT)
+  SubscribeMode mode = 2;
+}
+
+// ---- Mode 1: BBO ------------------------------------------------------------
+
+message BboUpdate {
+  string symbol        = 1;
+  uint64 sequence      = 2;
+  int64  timestamp_us  = 3;
+  double best_bid      = 4;
+  double best_bid_size = 5;
+  double best_ask      = 6;
+  double best_ask_size = 7;
+}
+
+// ---- Mode 2: Volume Bands ---------------------------------------------------
+
+// One notional band: the price reached once 'notional' USD of depth has been
+// consumed from the top of book.
+message NotionalBand {
+  string label    = 1; // "1M", "5M", "10M", "25M", "50M+"
+  double notional = 2; // USD target
+  double price    = 3; // price at which the target is reached
+}
+
+message VolumeBandsUpdate {
+  string symbol       = 1;
+  uint64 sequence     = 2;
+  int64  timestamp_us = 3;
+  // 'buy' measures the bid book (买盘, prices descend from best_bid);
+  // 'sell' measures the ask book (卖盘, prices ascend from best_ask).
+  repeated NotionalBand buy  = 4;
+  repeated NotionalBand sell = 5;
+}
+
+// ---- Mode 3: Price Bands ----------------------------------------------------
+
+message PriceBand {
+  double bps    = 1; // offset from the BBO in basis points (1bp = 1e-4)
+  double price  = 2; // sell: best_ask*(1+bps/1e4); buy: best_bid*(1-bps/1e4)
+  double volume = 3; // cumulative size (base units) from the BBO out to 'price'
+}
+
+message PriceBandsUpdate {
+  string symbol       = 1;
+  uint64 sequence     = 2;
+  int64  timestamp_us = 3;
+  double best_bid     = 4;
+  double best_ask     = 5;
+  // 'buy' = 买盘 / bid book, bands walk down from best_bid.
+  // 'sell' = 卖盘 / ask book, bands walk up from best_ask.
+  repeated PriceBand buy  = 6;
+  repeated PriceBand sell = 7;
+}
+
+// ---- Wire envelope ----------------------------------------------------------
+
+// Exactly one field is set, matching the subscriber's requested mode.
+message MarketUpdate {
+  oneof payload {
+    BboUpdate         bbo          = 1;
+    VolumeBandsUpdate volume_bands = 2;
+    PriceBandsUpdate  price_bands  = 3;
+    BookUpdate        book         = 4;
+  }
+}
+
+// Aggregator streaming API.
+service Aggregator {
+  // Subscribe to a symbol, receiving updates in the requested mode.
+  rpc Subscribe(SubscribeRequest) returns (stream MarketUpdate);
+}
